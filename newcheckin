@@ -1,0 +1,87 @@
+$ cat first
+DatE=`date +"%m-%d-%y"`
+commit_id=`logname`
+
+rm VMlist host_name Aassembly_Number Assembly_details slot_host slot_ids finalcommand workorder VMlist_nj VMlist_tn 2> /dev/null
+echo "enter SCCB id"
+read SCCB_id
+echo "enter the vm name"
+read VMs
+VMs=$( echo $VMs | tr '[A-Z]' '[a-z]' )
+echo "enter the version"
+read versionNumber
+echo "any DC Preferred (CNJ/TPC/BOTH)"
+read preferred_DC
+preferred_DC=$(echo $preferred_DC| tr '[a-z]' '[A-Z]' )
+for i in $VMs
+do
+echo $i >> VMlist
+VM=$i
+done
+echo $VM
+echo "Checking host details"
+bxp host $VM > host_name
+old_version=`cat host_name | grep -iA2 partitionversion | tail -1 | awk -F"|" '{print $NF}' | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g" | sed 's/[ \t]*$//'`
+cat host_name | grep -A2 assemblyid
+assemblyId=`cat host_name | grep -A2 assemblyid | grep $VM | awk -F"|" '{print $1}'| sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g" | sed 's/[ \t]*$//'`
+echo "$assemblyId" > Aassembly_Number
+echo "bxp assembly $assemblyId"
+echo "Checking assembly details"
+bxp assembly $assemblyId > Assembly_details
+for i in `cat VMlist`
+do
+case "$preferred_DC" in
+CNJ)
+cat Assembly_details | grep CNJ | grep $i | head -1 | awk -F"|" '{print $3 }' | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g" >> VMlist_nj
+cat Assembly_details | grep CNJ | grep $i | head -1 | awk -F"|" '{print $1 ":" $3 ":" $6}' | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g" >> slot_host
+cat Assembly_details | grep CNJ | grep $i | head -1 | awk -F"|" '{print $1 }' | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g" >> slot_ids
+ServerNumber=`cat VMlist_nj | wc -l`
+;;
+TPC)
+cat Assembly_details | grep TPC | grep $i | head -1 | awk -F"|" '{print $3 }' | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g" >> VMlist_tn
+cat Assembly_details | grep TPC | grep $i | head -1 | awk -F"|" '{print $1 ":" $3 ":" $6}' | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g" >> slot_host
+cat Assembly_details | grep TPC | grep $i | head -1 | awk -F"|" '{print $1 }' | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g" >> slot_ids
+ServerNumber=`cat VMlist_tn | wc -l`
+;;
+BOTH)
+cat Assembly_details | grep $i | head -1 | awk -F"|" '{print $1 ":" $3 ":" $6}' | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g" >> slot_host
+cat Assembly_details | grep $i | head -1 | awk -F"|" '{print $1 }' | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g" >> slot_ids
+ServerNumber=`cat VMlist | wc -l`
+;;
+esac
+done
+echo "Opening Workorder and Creating Commands "
+for i in `cat slot_ids`
+do
+echo "awo-slot-action $i replace -v $versionNumber" >> finalcommand
+done
+CommandNo=`cat finalcommand | wc -l`
+if [ "$ServerNumber" == "$CommandNo" ]
+then
+bxp owo $SCCB_id > workorder
+workorder_id=`cat workorder | awk -F"-" '{print $2}' | sed -e 's/^[ \t]*//'`
+cat finalcommand >> /tmp/wo/$commit_id/$workorder_id
+echo "$CommandNo Commands formed"
+echo ""
+echo "SCCB ID       : $SCCB_id"
+echo "Assembly ID   : $assemblyId"
+echo "Workorder ID  : $workorder_id"
+echo "Old Version   : $old_version "
+echo "New Version   : $versionNumber"
+echo ""
+echo "SCCB ID       : $SCCB_id" >> request_processed_on_$DatE
+echo "Assembly ID   : $assemblyId" >> request_processed_on_$DatE
+echo "Workorder ID  : $workorder_id" >> request_processed_on_$DatE
+echo "New Version   : $versionNumber" >> request_processed_on_$DatE
+echo "" >> request_processed_on_$DatE
+echo "slotid : hostName : previous_Version" >> request_processed_on_$DatE
+cat slot_host >> request_processed_on_$DatE
+echo "bxp update-assembly -o $workorder_id -a $assemblyId -c $SCCB_id -y " >> request_processed_on_$DatE
+echo ""
+cat finalcommand
+echo ""
+echo -e "The command to proceed with the deployment is \n\nbxp update-assembly -o $workorder_id -a $assemblyId -c $SCCB_id -y "
+else
+echo "there is a missmatch in the number of servers and number of commnads"
+fi
+echo ""
